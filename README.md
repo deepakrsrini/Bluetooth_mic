@@ -23,6 +23,12 @@ Turn your phone into a microphone for a Bluetooth speaker. VoiceCast is a web ap
 ### Hosting on GitHub Pages
 Settings → Pages → Source: *Deploy from a branch* → `main` / `(root)`. The app is then at `https://<user>.github.io/Bluetooth_mic/`.
 
+## Crackling or pops?
+- In the app: **More → Sound quality → Audio buffer → Stable** (now the default). It adds about 30–40 ms of lag but stops audio dropouts.
+- The status line under the mic button shows a live **Dropouts** count in Chrome, so you can see whether a change helped.
+- Play music from another app through the same speaker. If that crackles too, the problem is the Bluetooth connection itself: move the phone closer, keep a clear line of sight, and keep it away from Wi-Fi routers and microwaves.
+- Lower mic gain if you get a "Too loud" warning, because heavy limiting sounds like distortion.
+
 ## Tips
 - Keep a few metres between the phone and the speaker, with the speaker pointing away from you. Distance prevents feedback better than any setting.
 - Bluetooth adds roughly 100–250 ms of delay that no app can remove. For speeches, use Hold to talk.

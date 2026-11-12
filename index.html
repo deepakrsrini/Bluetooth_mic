@@ -261,6 +261,15 @@ a.dl{color:var(--a1);font-size:13px;display:inline-block;margin-top:8px}
   <!-- MORE -->
   <section class="panel" data-p="more">
     <div class="card">
+      <h3>Sound quality</h3>
+      <div class="tg"><div class="t"><b>Audio buffer</b><small>Hear crackles or pops? Choose Stable. It adds about 30–40 ms of lag, which is small next to Bluetooth's 150–300 ms.</small></div></div>
+      <div class="seg" id="bufSeg" style="display:flex;margin-bottom:4px">
+        <button data-b="fast" style="flex:1">Fastest</button>
+        <button data-b="balanced" style="flex:1">Balanced</button>
+        <button data-b="stable" style="flex:1">Stable</button>
+      </div>
+    </div>
+    <div class="card">
       <h3>Devices</h3>
       <label class="fld" for="inSel">Microphone</label>
       <select id="inSel"><option value="">Default microphone</option></select>
@@ -298,8 +307,9 @@ a.dl{color:var(--a1);font-size:13px;display:inline-block;margin-top:8px}
 /* ---------------- state ---------------- */
 const DEFAULTS = {volume:0.85, micGain:1, enhance:0.5, pitch:0, lowcut:90, bass:0, presence:2, air:1.5,
   character:'none', reverb:0.12, room:0.35, echo:0, echoTime:0.3, echoFb:0.35,
-  howl:true, howlSens:0.55, gate:true, gateTh:-52, aec:false, ns:true, agc:false, wake:true, mode:'tap', preset:'natural'};
+  howl:true, howlSens:0.55, gate:true, gateTh:-52, aec:false, ns:true, agc:false, wake:true, mode:'tap', preset:'natural', buffer:'stable'};
 const STORE='voicecast:v1';
+const BUFFERS={fast:'interactive', balanced:'balanced', stable:'playback'};
 let S = Object.assign({}, DEFAULTS);
 try{ Object.assign(S, JSON.parse(localStorage.getItem(STORE)||'{}')); }catch(e){}
 const save = () => { try{ localStorage.setItem(STORE, JSON.stringify(S)); }catch(e){} };
@@ -339,6 +349,7 @@ function syncUI(){
   $$('#presets .chip').forEach(c=>c.classList.toggle('sel',c.dataset.p===S.preset));
   $$('#chars .chip').forEach(c=>c.classList.toggle('sel',c.dataset.c===S.character));
   $$('#modeSeg button').forEach(b=>b.classList.toggle('sel',b.dataset.mode===S.mode));
+  $$('#bufSeg button').forEach(b=>b.classList.toggle('sel',b.dataset.b===S.buffer));
   updateTalkLabel();
 }
 
@@ -362,8 +373,8 @@ class Pitch extends AudioWorkletProcessor{
 class Gate extends AudioWorkletProcessor{
   static get parameterDescriptors(){return[{name:'threshold',defaultValue:-52,minValue:-100,maxValue:0,automationRate:'k-rate'},{name:'enabled',defaultValue:1,minValue:0,maxValue:1,automationRate:'k-rate'}]}
   constructor(){super();this.env=0;this.g=1;this.hold=0;this.open=true;
-    this.atk=Math.exp(-1/(sampleRate*.002));this.rel=Math.exp(-1/(sampleRate*.06));
-    this.gUp=1-Math.exp(-1/(sampleRate*.004));this.gDn=1-Math.exp(-1/(sampleRate*.15));this.holdN=Math.round(sampleRate*.25)}
+    this.atk=Math.exp(-1/(sampleRate*.005));this.rel=Math.exp(-1/(sampleRate*.06));
+    this.gUp=1-Math.exp(-1/(sampleRate*.01));this.gDn=1-Math.exp(-1/(sampleRate*.15));this.holdN=Math.round(sampleRate*.25)}
   process(ins,outs,par){const x=ins[0]&&ins[0][0],y=outs[0][0];if(!y)return true;if(!x){y.fill(0);return true}
     if(par.enabled[0]<.5){y.set(x);this.flag(true);return true}
     const open=Math.pow(10,par.threshold[0]/20),close=open*.5;
@@ -385,7 +396,7 @@ function makeIR(ctx,room){const sec=.35+room*3.6,len=Math.floor(ctx.sampleRate*s
 
 async function buildEngine(){
   const Ctx=window.AudioContext||window.webkitAudioContext;
-  const ctx=new Ctx({latencyHint:'interactive'}); A.ctx=ctx;
+  const ctx=new Ctx({latencyHint:BUFFERS[S.buffer]||'playback'}); A.ctx=ctx; A.drops0=null; A.dropsWarned=0;
   const n=A.n, G=v=>{const g=ctx.createGain();g.gain.value=v;return g}, F=(type,f,q,g)=>{const b=ctx.createBiquadFilter();b.type=type;b.frequency.value=f;if(q!=null)b.Q.value=q;if(g!=null)b.gain.value=g;return b};
   let hasWorklet=false;
   if(ctx.audioWorklet){try{const url=URL.createObjectURL(new Blob([WORKLET],{type:'application/javascript'}));await ctx.audioWorklet.addModule(url);hasWorklet=true}catch(e){console.warn('worklet',e)}}
@@ -421,7 +432,7 @@ async function buildEngine(){
   let prev=n.bus; A.notches=[];
   for(let i=0;i<8;i++){const f=F('peaking',1000,14,0);prev.connect(f);prev=f;A.notches.push({f,hz:0,depth:0})}
   n.duck=G(1); n.master=G(0); n.limiter=ctx.createDynamicsCompressor();
-  Object.entries({threshold:-2,knee:0,ratio:20,attack:.002,release:.08}).forEach(([k,v])=>n.limiter[k].value=v);
+  Object.entries({threshold:-4,knee:4,ratio:20,attack:.003,release:.2}).forEach(([k,v])=>n.limiter[k].value=v);
   prev.connect(n.duck).connect(n.master).connect(n.limiter).connect(ctx.destination);
   n.recDest=ctx.createMediaStreamDestination(); n.limiter.connect(n.recDest);
 
@@ -435,12 +446,12 @@ async function buildEngine(){
   ctx.onstatechange=updateMeta;
   if(navigator.audioSession){try{navigator.audioSession.type='play-and-record'}catch(e){}}
   applyAll();
-  setInterval(howlTick,40);
 }
+setInterval(howlTick,40);
 
 async function openMic(){
   if(A.stream) return;
-  const c={echoCancellation:!!S.aec, noiseSuppression:!!S.ns, autoGainControl:!!S.agc, channelCount:1};
+  const c={echoCancellation:!!S.aec, noiseSuppression:!!S.ns, autoGainControl:!!S.agc, channelCount:1, sampleRate:{ideal:A.ctx.sampleRate}};
   if(S.inDevice) c.deviceId={exact:S.inDevice};
   try{ A.stream=await navigator.mediaDevices.getUserMedia({audio:c}); }
   catch(e){ if(S.inDevice){delete S.inDevice;save();return openMic()} throw e; }
@@ -451,6 +462,15 @@ async function openMic(){
 function closeMic(){ if(A.src){try{A.src.disconnect()}catch(e){}A.src=null} if(A.stream){A.stream.getTracks().forEach(t=>t.stop());A.stream=null} }
 async function reopenMic(){ if(!A.stream) return; closeMic(); await openMic(); }
 
+async function rebuildEngine(){
+  if(!A.ctx) return;
+  const wasLive=A.live;
+  if(A.rec){ try{A.rec.stop()}catch(e){} }
+  clearTimeout(A.releaseT); A.live=false; closeMic();
+  try{ await A.ctx.close(); }catch(e){}
+  A.ctx=null; A.building=null; A.n={}; A.notches=[]; A.nextNotch=0; hbuf=null; vbuf=null; renderNotches();
+  if(wasLive) await setLive(true); else { updateTalkLabel(); updateMeta(); }
+}
 async function ensureEngine(){
   if(!A.ctx){ if(!A.building) A.building=buildEngine(); await A.building; }
   if(A.ctx.state!=='running') await A.ctx.resume();
@@ -465,7 +485,7 @@ function apply(k){
   switch(k){
     case 'volume': ramp(n.master.gain, A.live? v*v : 0); break;
     case 'micGain': ramp(n.inGain.gain,v); break;
-    case 'enhance': n.comp.threshold.value=-12-26*v; n.comp.ratio.value=1.5+6*v; ramp(n.makeup.gain,dbToGain(v*10)); ramp(n.mud.gain,-5*v); break;
+    case 'enhance': n.comp.threshold.value=-12-26*v; n.comp.ratio.value=1.5+6*v; ramp(n.makeup.gain,dbToGain(v*6)); ramp(n.mud.gain,-5*v); break;
     case 'pitch': if(n.pitch.parameters) ramp(n.pitch.parameters.get('ratio'),Math.pow(2,v/12),.01); break;
     case 'lowcut': ramp(n.hp.frequency,v); break;
     case 'bass': ramp(n.bass.gain,v); break;
@@ -522,8 +542,19 @@ function updateTalkLabel(){
 function updateMeta(){
   const m=$('#meta'); if(!A.ctx||A.ctx.state!=='running'){m.textContent='';return}
   const ms=Math.round(((A.ctx.baseLatency||0)+(A.ctx.outputLatency||0))*1000);
-  m.textContent = (ms?`Processing ~${ms} ms`:'Processing active')+' · '+Math.round(A.ctx.sampleRate/1000)+' kHz';
+  let txt=(ms?`Phone lag ~${ms} ms`:'Processing active')+' · '+Math.round(A.ctx.sampleRate/1000)+' kHz';
+  const ps=A.ctx.playoutStats;
+  if(ps && typeof ps.fallbackFramesEvents==='number'){
+    if(A.drops0==null) A.drops0=ps.fallbackFramesEvents;
+    const d=ps.fallbackFramesEvents-A.drops0; txt+=` · Dropouts: ${d}`;
+    if(d>A.dropsWarned+5 && S.buffer!=='stable'){ A.dropsWarned=d; toast('Crackles detected. Switch Audio buffer to Stable (More tab)'); }
+  }
+  m.textContent=txt;
 }
+let hotT=0;
+setInterval(()=>{ if(!A.ctx||!A.live) return; updateMeta();
+  if(A.n.limiter && A.n.limiter.reduction < -9){ if(++hotT===6) toast('Too loud: distortion likely. Lower mic gain or volume a little.'); } else hotT=0;
+},500);
 
 /* talk button: tap or hold */
 const talk=$('#talk');
@@ -575,10 +606,12 @@ $('#resetNotch').onclick=()=>{ if(!A.ctx) return; A.notches.forEach(x=>{x.hz=0;x
 
 /* ---------------- visualiser ---------------- */
 const cv=$('#viz'), g2=cv.getContext('2d'); let vbuf=null, phase=0, lvl=0;
-function sizeCanvas(){const r=cv.getBoundingClientRect(),d=Math.min(devicePixelRatio||1,2);cv.width=r.width*d;cv.height=r.height*d}
+function sizeCanvas(){const r=cv.getBoundingClientRect(),d=Math.min(devicePixelRatio||1,1.5);cv.width=r.width*d;cv.height=r.height*d}
 addEventListener('resize',sizeCanvas); sizeCanvas();
-function draw(){
+let lastDraw=0;
+function draw(t){
   requestAnimationFrame(draw);
+  if(t-lastDraw<32) return; lastDraw=t;
   const W=cv.width,H=cv.height,cx=W/2,cy=H/2,R=W*.3; g2.clearRect(0,0,W,H);
   const bars=72; let data=null, sum=0;
   if(A.ctx&&A.live){ const an=A.n.viz; if(!vbuf) vbuf=new Uint8Array(an.frequencyBinCount); an.getByteFrequencyData(vbuf); data=vbuf; for(let i=0;i<48;i++) sum+=vbuf[i]; }
@@ -652,6 +685,8 @@ $('#chars').innerHTML=Object.entries(CHARS).map(([k,l])=>`<button class="chip" d
 $('#presets').addEventListener('click',e=>{const c=e.target.closest('.chip');if(!c)return;const p=PRESETS[c.dataset.p];
   Object.assign(S,{echoTime:.3,echoFb:.35},p,{preset:c.dataset.p}); delete S.label; save(); syncUI(); applyAll(); apply('room');});
 $('#chars').addEventListener('click',e=>{const c=e.target.closest('.chip');if(!c)return;S.character=c.dataset.c;S.preset='';save();syncUI();apply('character')});
+$('#bufSeg').addEventListener('click',async e=>{const b=e.target.closest('button');if(!b||b.dataset.b===S.buffer)return;S.buffer=b.dataset.b;save();syncUI();
+  await rebuildEngine(); toast(S.buffer==='stable'?'Stable buffer on: should stop the crackles':'Audio buffer changed');});
 $('#modeSeg').addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;if(A.live)setLive(false);S.mode=b.dataset.mode;save();syncUI()});
 $('#tabs').addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;$$('#tabs button').forEach(x=>x.classList.toggle('sel',x===b));$$('.panel').forEach(p=>p.classList.toggle('show',p.dataset.p===b.dataset.t))});
 const FX_KEYS=new Set(['enhance','pitch','bass','presence','air','reverb','room','echo','echoTime','echoFb']);
